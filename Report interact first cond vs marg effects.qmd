@@ -1,0 +1,194 @@
+---
+title: "Why should you report interactions first ?"
+subtitle: "a quick word on conditional and marginal effect"
+author: "Martial Foegel"
+institute: "Laboratoire de Linguistique Formelle" 
+date: 2025-09-16
+date-modified: 2025-09-19
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    toc-expand: true
+    toc-location: left
+    page-layout: full
+    df-print: paged
+    embed-resources: true
+bibliography: references.bib
+link-citations: true 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# ipak function: install and load multiple R packages.
+# check to see if packages are installed. Install them if they are not, 
+# then load them into the R session if load_pkg is set to true.
+
+ipak <- function(pkg, load_pkg = T){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)){
+    install.packages(new.pkg, dependencies = TRUE)}
+  if (load_pkg){
+    sapply(pkg, require, character.only = TRUE)}
+}
+
+# usage
+packages_to_load <- c("ggplot2")
+
+packages_not_to_load <- c("emmeans", "marginaleffects")
+
+ipak(packages_to_load)
+
+ipak(packages_not_to_load, load_pkg = F)
+```
+
+In this statistical note, we will discuss why you should always report your interaction first when working with a linear model. To understand this, we will talk a bit about conditional and marginal effect and shed some light into why sometimes a targeted effect can disappears. In this note, we will assume the use of the default R treatment/dummy coding for the contrast of our models.
+
+## Dataset
+
+For now, let's check out the dataset we will be working with, `ToothGrowth`, defined as follow : The response is the length of odontoblasts (cells responsible for tooth growth) in 60 guinea pigs, named *len*. Each animal received one of three *dose* levels of vitamin C (0.5, 1, and 2 mg/day) by one of two delivery methods, orange juice or ascorbic acid (a form of vitamin C and coded as VC), named *supp*.
+
+```{r}
+data(ToothGrowth)
+
+head(ToothGrowth)
+```
+
+# Adding an interaction to a model : what does that entail ?
+
+## Model without interaction
+
+Let us fit a model without interaction first and get the estimated values of each effect.
+
+```{r}
+# Fit model without interaction
+model_without_interaction <- lm(len ~ dose + supp, data = ToothGrowth)
+
+model_without_interaction$coefficients
+```
+
+We are going to look only at the estimated coefficient of our model. We'll check a bit more what each of those values refer to:
+
+- *Intercept* value of `r round(model_without_interaction$coefficients[1], digits = 1)` is the expected length of odontoblasts when the *dose* is 0 and it was delivered by orange juice. Of course, this didn't happen in the experiment (since every guinea pig was given some amount of vitamin C), but we can get it easily using the function `predict`:
+
+```{r}
+predict(model_without_interaction, 
+        newdata = data.frame(dose = 0,
+                             supp = "OJ"))
+```
+
+-   *dose* value of `r round(model_without_interaction$coefficients[2], digits = 1)`corresponds to the **main effect** of dose, the estimated increase in length of odontoblasts for every unit increase of dose (see below the increase between a dose of 1 and 2), averaged across both delivery method.
+
+```{r}
+ggplot(ToothGrowth, aes(x = dose, y = len)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Main effect of dose on odontoblasts length",
+       x = "Dose", y = "Odontoblasts length")
+```
+
+-   *suppVC* value of `r round(model_without_interaction$coefficients[3], digits = 1)` corresponds to the **main effect** of *supp*, the estimated decrease in length of odontoblasts from changing the delivery method from orange juice to ascorbic acid (see below the decrease between OJ and VC), averaged across all doses.
+
+```{r}
+ggplot(ToothGrowth, aes(x = supp, y = len)) +
+  geom_point(size = 3) +
+  stat_summary(fun=mean, col = "blue", geom="line", aes(group = 1))+
+  labs(title = "Main effect of delivery method on odontoblasts length",
+       x = "Delivery method", y = "Odontoblasts length")
+```
+
+## Model with interaction
+
+Just to recap, this was the estimated values of our model without interaction:
+
+```{r}
+model_without_interaction$coefficients
+```
+
+Now with interaction:
+
+```{r}
+# Fit model with interaction
+model_with_interaction <- lm(len ~ dose * supp, data = ToothGrowth)
+model_with_interaction$coefficients
+```
+
+You can see that the values are not the same. Why is that ? Well let's look at the intercept first. The *Intercept* value is still the expected length of odontoblasts when the *dose* is 0 and if was delivered by orange juice. But this time, adding the interaction has made it so that each delivery method has it's own slope, so they each have a different intercept. It is now a **conditional intercept**, conditional on the value of *supp*, and not an average anymore. We can use the same method as before to get the two intercepts:
+
+```{r}
+predict(model_with_interaction, 
+        newdata = data.frame(dose = 0,
+                             supp = c("OJ", "VC"))) |>
+  setNames(c("Intercept_OJ", "Intercept_VC"))
+```
+You can see above that the difference between the intercepts corresponds to the *suppVC* value of `r round(model_with_interaction$coefficients[3], digits = 1)`. This is because this the *suppVC* effect is conditional on *dose* being 0.
+
+A similar train of though is used to understand the *dose* value of `r round(model_with_interaction$coefficients[2], digits = 1)`. It is the **effect** of a unit increase of dose **conditional** on the fact that the vitamin C was delivered with orange juice on odontoblasts' length. See below:
+
+```{r}
+predict(model_with_interaction, 
+        newdata = data.frame(dose = c(0,1),
+                             supp = c("OJ"))) |>
+  setNames(c("OJ_dose_0", "OJ_dose_1"))
+```
+
+For the interaction term, *dose:suppVC*, like all first order interaction terms, it is a difference of a difference. In this case the difference in odontoblasts' length between a unit increase of dose of vitamin C (difference between a dose of 0 and 1) for the first vs second delivery method. You can calculate and find back the value of `r round(model_with_interaction$coefficients[4], digits = 1)` by doing: 
+
+```{r}
+len_d0_OJ <- predict(model_with_interaction,
+                     newdata = data.frame(dose = c(0),
+                                          supp = c("OJ")))
+
+len_d1_OJ <- predict(model_with_interaction,
+                     newdata = data.frame(dose = c(1),
+                                          supp = c("OJ")))
+
+len_d0_VC <- predict(model_with_interaction,
+                     newdata = data.frame(dose = c(0),
+                                          supp = c("VC")))
+
+len_d1_VC <- predict(model_with_interaction,
+                     newdata = data.frame(dose = c(1),
+                                          supp = c("VC")))
+
+(len_d0_OJ - len_d1_OJ) - (len_d0_VC - len_d1_VC)
+```
+
+And you can find all those values back on the graph below:
+
+```{r}
+ggplot(ToothGrowth, aes(x = dose, y = len, color = supp)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Main effect of dose on odontoblasts length",
+       x = "Dose", y = "Odontoblasts length")
+```
+
+# Conditional vs marginal effect
+
+As we've seen in above, adding an interaction term changes the way we interpret estimates. With no interaction term, **marginal** and **conditional effects** are the same, and we call those effects **main effect**. However, adding a an interaction between two variable makes it so that the estimate the model gives about one variable's effect is a **conditional effect**, *i.e.* conditional on the other variable being set to a certain value. If you want the **marginal effects**, *i.e.* the average effect of a predictor ignoring or averaging other the other variables, then you need to use packages like `emmeans` or `marginaleffect`.
+
+```{r}
+model_without_interaction$coefficients
+```
+
+using the package `emmeans`, you can find back the value for *dose* `r round(model_without_interaction$coefficients[2], digits = 1)` and *suppVC* `r round(model_without_interaction$coefficients[3], digits = 1)` by doing the difference between the rows of the column *emmean*:
+
+```{r}
+emmeans::emmeans(model_with_interaction, ~ supp)
+
+emmeans::emmeans(model_with_interaction, ~ dose, at = list(dose = c(0, 1)))
+```
+
+Or find the values back directly by using the package `marginaleffects`:
+
+```{r}
+marginaleffects::avg_comparisons(model_with_interaction)
+```
+
+Things get a bit more complicated when talking about mixed models or generalized lineal models, for more details see @tofighi2025.
+
+# Conclusion
+
+From the difference between **main effects**, **conditional effects** and **marginal effects** stems the reasons why you should put your interaction effect first. Adding an interaction between two variables change the meaning of the effect of those variables, changing from an overall effect of the variables to a more specific, **conditional effect** of one variable when the other is held at some constant value. So putting the interaction first signal to the reader that if you talk about the simpler effect of a variable after the interaction, it is in fact a **conditional effect** ! It also avoid you wrongly specifying this effect as a **marginal effects**, though, as we've seen above, you can quite easily find and describe those as needed.
